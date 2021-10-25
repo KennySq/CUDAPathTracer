@@ -1,0 +1,14 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CudaCompile Include="Main.cu" />
+    <CudaCompile Include="src\PathTracer.cu" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\DXSample.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="inc\WinUtil.h" />
+    <ClInclude Include="inc\PathTracer.cuh" />
+  </ItemGroup>
+</Project>
