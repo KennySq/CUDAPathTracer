@@ -13,8 +13,17 @@
 // General Variables for CUDA //
 
 float* cudaTriangles = nullptr;
+texture<float4, 1, cudaReadModeElementType> cudaTriangleTexture;
+
+XMFLOAT3 cudaSceneBoundBoxMin;
+XMFLOAT3 cudaSceneBoundBoxMax;
 
 ////////////////////////////////
+
+void GetError(cudaError_t error)
+{
+	printf("%s\n", cudaGetErrorString(error));
+}
 
 PathTracer::PathTracer()
 	: DXSample(1280, 720, "CUDA PathTracer")
@@ -96,7 +105,7 @@ void PathTracer::loadAssets()
 	meshPath += "..\\..\\CUDAPathTracer\\resources\\shiba\\shiba.fbx";
 	FbxLoader loader(meshPath.c_str());
 
-	//extractTrianglesFromVertices(loader.Vertices, mMeshTriangles);
+	extractTrianglesFromVertices(loader.Vertices, loader.Indices, mMeshTriangles);
 
 
 }
@@ -119,13 +128,35 @@ cudaExternalMemory_t PathTracer::importNTHandle(HANDLE handle, address64 size)
 	return extMemory;
 }
 
+extern "C"
+{
+	void InitTriangleTexture(float* triangles, uint triangleCount)
+	{
+		cudaTriangleTexture.normalized = false;
+		cudaTriangleTexture.filterMode = cudaFilterModePoint;
+		cudaTriangleTexture.addressMode[0] = cudaAddressModeWrap;
+
+		long long size = sizeof(XMFLOAT4) * triangleCount * 3;
+
+		cudaChannelFormatDesc channelDesc = cudaCreateChannelDesc<XMFLOAT4>();
+
+		cudaError_t error = cudaBindTexture(nullptr, &cudaTriangleTexture, triangles, &channelDesc, size);
+		GetError(error);
+
+	}
+}
+
 void PathTracer::extractTrianglesFromVertices(std::vector<Vertex>& vertices, std::vector<uint>& indices, std::vector<XMFLOAT4> triangles)
 {
 	for (uint i = 0; i < indices.size(); i += 3)
 	{
-		XMFLOAT4 position1 = XMFLOAT4(vertices[i].mPosition.x, vertices[i].mPosition.y, vertices[i].mPosition.z, 1.0f);
-		XMFLOAT4 position2 = XMFLOAT4(vertices[i + 1].mPosition.x, vertices[i + 1].mPosition.y, vertices[i + 1].mPosition.z, 1.0f);
-		XMFLOAT4 position3 = XMFLOAT4(vertices[i + 2].mPosition.x, vertices[i + 2].mPosition.y, vertices[i + 2].mPosition.z, 1.0f);
+		uint index1 = indices[i];
+		uint index2 = indices[i+1];
+		uint index3 = indices[i+2];
+
+		XMFLOAT4 position1 = XMFLOAT4(vertices[index1].mPosition.x, vertices[index1].mPosition.y, vertices[index1].mPosition.z, 1.0f);
+		XMFLOAT4 position2 = XMFLOAT4(vertices[index2].mPosition.x, vertices[index2].mPosition.y, vertices[index2].mPosition.z, 1.0f);
+		XMFLOAT4 position3 = XMFLOAT4(vertices[index3].mPosition.x, vertices[index3].mPosition.y, vertices[index3].mPosition.z, 1.0f);
 
 		// pre-edge calculation, edge를 미리 계산하여 Path-tracing 시의 GPU 연산 부하를 줄입니다.
 		mMeshTriangles.push_back(XMFLOAT4(position1.x, position1.y, position1.z, 0.0f));
@@ -141,13 +172,19 @@ void PathTracer::extractTrianglesFromVertices(std::vector<Vertex>& vertices, std
 
 	if (triangleSize > 0)
 	{
-		cudaMalloc(&cudaTriangles, triangleSize);
+		cudaError_t error = cudaMalloc(&cudaTriangles, triangleSize);
+		GetError(error);
 
-		cudaMemcpy(cudaTriangles, mMeshTriangles.data(), triangleSize, cudaMemcpyHostToDevice);
+
+		error = cudaMemcpy(cudaTriangles, mMeshTriangles.data(), triangleSize, cudaMemcpyHostToDevice);
+		GetError(error);
+
+		InitTriangleTexture(cudaTriangles, triangleCount);
 
 	}
 
-
+	cudaSceneBoundBoxMax = mMeshBoundingBox[0];
+	cudaSceneBoundBoxMin = mMeshBoundingBox[1];
 
 
 }
