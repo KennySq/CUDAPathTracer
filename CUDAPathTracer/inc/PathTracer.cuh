@@ -8,6 +8,8 @@
 #include"cudaD3D11.h"
 #include"cuda_surface_types.h"
 #include"cuda_pipeline.h"
+#include"curand_globals.h"
+#include"curand_kernel.h"
 
 
 #include"Math.cuh"
@@ -72,7 +74,6 @@ private:
 	
 	CUdevice mCudaDevice;
 	
-
 	uint mTriangleCount;
 	
 	ComPtr<ID3D11Buffer> mScreenVB;

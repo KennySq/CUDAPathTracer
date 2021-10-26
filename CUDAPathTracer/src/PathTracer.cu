@@ -20,6 +20,61 @@ float3 cudaSceneBoundBoxMax;
 
 float4* cudaRenderTexture;
 
+enum Refl_t
+{
+	DIFF, // Diffuse
+	SPEC, // Specular
+	REFR, // Refract
+};
+
+struct Sphere {
+
+	float rad;				// radius 
+	float3 pos, emi, col;	// position, emission, color 
+	Refl_t refl;			// reflection type (DIFFuse, SPECular, REFRactive)
+
+	__device__ float intersect(const Ray& r) const { // returns distance, 0 if nohit 
+
+		// Ray/sphere intersection
+		// Quadratic formula required to solve ax^2 + bx + c = 0 
+		// Solution x = (-b +- sqrt(b*b - 4ac)) / 2a
+		// Solve t^2*d.d + 2*t*(o-p).d + (o-p).(o-p)-R^2 = 0 
+
+		float3 op = pos - r.Origin;  // 
+		float t, epsilon = 0.01f;
+		float b = Dot(op, r.Direction);
+		float disc = b * b - Dot(op, op) + rad * rad; // discriminant
+		if (disc < 0) return 0; else disc = sqrtf(disc);
+		return (t = b - disc) > epsilon ? t : ((t = b + disc) > epsilon ? t : 0);
+	}
+};
+
+__constant__ Sphere spheres[] = {
+	// FORMAT: { float radius, float3 position, float3 emission, float3 colour, Refl_t material }
+	// cornell box
+	//{ 1e5f, { 1e5f + 1.0f, 40.8f, 81.6f }, { 0.0f, 0.0f, 0.0f }, { 0.75f, 0.25f, 0.25f }, DIFF }, //Left 1e5f
+	//{ 1e5f, { -1e5f + 99.0f, 40.8f, 81.6f }, { 0.0f, 0.0f, 0.0f }, { .25f, .25f, .75f }, DIFF }, //Right 
+	//{ 1e5f, { 50.0f, 40.8f, 1e5f }, { 0.0f, 0.0f, 0.0f }, { .75f, .75f, .75f }, DIFF }, //Back 
+	//{ 1e5f, { 50.0f, 40.8f, -1e5f + 600.0f }, { 0.0f, 0.0f, 0.0f }, { 0.00f, 0.00f, 0.00f }, DIFF }, //Front 
+	//{ 1e5f, { 50.0f, -1e5f, 81.6f }, { 0.0f, 0.0f, 0.0f }, { .75f, .75f, .75f }, DIFF }, //Bottom 
+	//{ 1e5f, { 50.0f, -1e5f + 81.6f, 81.6f }, { 0.0f, 0.0f, 0.0f }, { .75f, .75f, .75f }, DIFF }, //Top 
+	//{ 16.5f, { 27.0f, 16.5f, 47.0f }, { 0.0f, 0.0f, 0.0f }, { 0.99f, 0.99f, 0.99f }, SPEC }, // small sphere 1
+	//{ 16.5f, { 73.0f, 16.5f, 78.0f }, { 0.0f, 0.f, .0f }, { 0.09f, 0.49f, 0.3f }, REFR }, // small sphere 2
+	//{ 600.0f, { 50.0f, 681.6f - .5f, 81.6f }, { 3.0f, 2.5f, 2.0f }, { 0.0f, 0.0f, 0.0f }, DIFF }  // Light 12, 10 ,8
+
+	//outdoor scene: radius, position, emission, color, material
+
+	//{ 1600, { 3000.0f, 10, 6000 }, { 37, 34, 30 }, { 0.f, 0.f, 0.f }, DIFF },  // 37, 34, 30 // sun
+	//{ 1560, { 3500.0f, 0, 7000 }, { 50, 25, 2.5 }, { 0.f, 0.f, 0.f }, DIFF },  //  150, 75, 7.5 // sun 2
+	{ 10000, { 50.0f, 40.8f, -1060 }, { 0.0003, 0.01, 0.15 }, { 0.175f, 0.175f, 0.25f }, DIFF }, // sky
+	{ 100000, { 50.0f, -100000, 0 }, { 0.0, 0.0, 0 }, { 0.8f, 0.2f, 0.f }, DIFF }, // ground
+	{ 110000, { 50.0f, -110048.5, 0 }, { 3.6, 2.0, 0.2 }, { 0.f, 0.f, 0.f }, DIFF },  // horizon brightener
+	{ 4e4, { 50.0f, -4e4 - 30, -3000 }, { 0, 0, 0 }, { 0.2f, 0.2f, 0.2f }, DIFF }, // mountains
+	{ 82.5, { 30.0f, 180.5, 42 }, { 16, 12, 6 }, { .6f, .6f, 0.6f }, DIFF },  // small sphere 1
+	{ 12, { 115.0f, 10, 105 }, { 0.0, 0.0, 0.0 }, { 0.9f, 0.9f, 0.9f }, REFR },  // small sphere 2
+	{ 22, { 65.0f, 22, 24 }, { 0, 0, 0 }, { 0.9f, 0.9f, 0.9f }, SPEC }, // small sphere 3
+};
+
 ////////////////////////////////
 
 void GetError(cudaError_t error)
@@ -34,12 +89,23 @@ PathTracer::PathTracer()
 	//cuCtxCreate()
 }
 
+__device__ float3 radiance(Ray& r, curandState* randState, const int triangleCount, const float3& sceneMinBound, const float3& sceneMaxBound)
+{
+	float3 mask = make_float3(1.0f, 1.0f, 1.0f);
+	float3 tempColor = make_float3(0.0f, 0.0f, 0.0f);
+
+	float t = 100000;
+
+}
+
 __global__ void kernelRender(CUsurfObject surf, float4* outTexture, const uint triCount, uint frameIndex, uint hashFrameIndex, float fovRadians, uint width, uint height, float3 sceneMinBound, float3 sceneMaxBound)
 {
 	uint x = blockDim.x * blockIdx.x + threadIdx.x; ///blockDim.x * blockIdx.y + threadIdx.x;
 	uint y = blockDim.y * blockIdx.y + threadIdx.y;
 
-	float3 camPos = make_float3(-25.0f, 0.0f, -25.0f);
+	int threadId = (blockIdx.x + blockIdx.y * gridDim.x) * (blockIdx.x * blockDim.y) + (threadIdx.y * blockDim.x) + threadIdx.x;
+
+	float3 camPos = make_float3(25.0f, 0.0f, 25.0f);
 	float3 camDir = Normalize(camPos - make_float3(0, 0, 0));
 
 	Ray ray = Ray(camPos, camDir);
@@ -52,6 +118,30 @@ __global__ void kernelRender(CUsurfObject surf, float4* outTexture, const uint t
 	int pixelIndex = (height - y - 1) * width + x;
 
 	float4 value = make_float4(0, 1, 1, 0);
+
+	curandState randState;
+	curand_init(hashFrameIndex + threadId, 0, 0, &randState);
+
+	Ray r = { camPos, camDir };
+
+	value = make_float4(v.x, v.y, 0.0f, 1.0f);
+
+	for (uint i = 0; i < 1; i++)
+	{
+		float3 d = u * ((.25f + x) / width - .5) + v * ((.25 + y) / height - .5) + r.Direction;
+	
+		d = Normalize(d);
+
+
+//		value = make_float4(d.x,d.y,d.z, 1.0f);
+	
+		float3 color = radiance(r, &randState, triCount, sceneMinBound, sceneMaxBound);
+		value = make_float4(color.x, color.y, color.z, 1.0f);
+
+	}
+
+
+
 	surf2Dwrite<float4>(value, surf, x * sizeof(float4), y);
 }	
 
@@ -370,6 +460,8 @@ void PathTracer::extractTrianglesFromVertices(std::vector<Vertex>& vertices, std
 		InitTriangleTexture(cudaTriangles, triangleCount);
 
 	}
+
+	mTriangleCount = triangleCount;
 
 	cudaSceneBoundBoxMax = mMeshBoundingBox[0];
 	cudaSceneBoundBoxMin = mMeshBoundingBox[1];
