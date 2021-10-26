@@ -129,15 +129,16 @@ __global__ void kernelRender(CUsurfObject surf, float4* outTexture, const uint t
 	for (uint i = 0; i < 1; i++)
 	{
 		float3 d = u * ((.25f + x) / width - .5) + v * ((.25 + y) / height - .5) + r.Direction;
+		//float3 d = u * ((float)x / (float)width ) + v * ((float)y / (float)height ) + r.Direction;
 	
 		d = Normalize(d);
 
 
 //		value = make_float4(d.x,d.y,d.z, 1.0f);
 	
-		float3 color = radiance(r, &randState, triCount, sceneMinBound, sceneMaxBound);
-		value = make_float4(color.x, color.y, color.z, 1.0f);
-
+		//float3 color = radiance(r, &randState, triCount, sceneMinBound, sceneMaxBound);
+		//value = make_float4(color.x, color.y, color.z, 1.0f);
+		value = make_float4(d.x, d.y, d.z, 1.0f);
 	}
 
 
