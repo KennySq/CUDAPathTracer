@@ -15,8 +15,10 @@
 float* cudaTriangles = nullptr;
 texture<float4, 1, cudaReadModeElementType> cudaTriangleTexture;
 
-XMFLOAT3 cudaSceneBoundBoxMin;
-XMFLOAT3 cudaSceneBoundBoxMax;
+float3 cudaSceneBoundBoxMin;
+float3 cudaSceneBoundBoxMax;
+
+float4* cudaRenderTexture;
 
 ////////////////////////////////
 
@@ -31,14 +33,32 @@ PathTracer::PathTracer()
 
 }
 
+__global__ void kernelRender(float4* outTexture, const uint triCount, uint frameIndex, uint hashFrameIndex, float fovRadians, uint width, uint height, float3 sceneMinBound, float3 sceneMaxBound)
+{
+	uint x = blockIdx.x * blockDim.x + threadIdx.y;
+	uint y = blockIdx.y * blockDim.y + threadIdx.y;
+
+	float3 camPos = make_float3(-25.0f, 0.0f, -25.0f);
+	float3 camDir = Normalize(camPos - make_float3(0, 0, 0));
+
+	Ray ray = Ray(camPos, camDir);
+	
+	float3 u = make_float3(width * fovRadians / height, 0.0f, 0.0f);
+	float3 v = Normalize(Cross(u, camDir)) * fovRadians;
+
+	float4 result = { 0,0,0,0 };
+
+	int pixelIndex = (height - y - 1) * width + x;
+	
+	outTexture[pixelIndex] = make_float4(0, 1, 0, 0);
+}
+
 void PathTracer::Awake()
 {
 	AcquireHardware();
 	AllocConsole();
 
 	loadAssets();
-	startCuda();
-
 
 
 	//importNTHandle();
@@ -47,18 +67,35 @@ void PathTracer::Awake()
 
 void PathTracer::Update(float delta)
 {
-	mContext->ClearRenderTargetView(mBackBufferRTV.Get(), DirectX::Colors::Blue);
+	cudaThreadSynchronize();
 
+	dim3 block = dim3(16, 16, 1);
+	dim3 grid = dim3(mWidth / block.x, mHeight / block.y, 1);
+
+	uint hashedFrame = hashFrame(mFrameIndex);
+	mContext->Map(mRenderTexture.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mRenderTextureMap);
+	cudaRenderTexture = reinterpret_cast<float4*>(mRenderTextureMap.pData);
+
+	kernelRender << < grid, block >> > (cudaRenderTexture, mTriangleCount, mFrameIndex, hashedFrame, XMConvertToRadians(90.0f), mWidth, mHeight, cudaSceneBoundBoxMin, cudaSceneBoundBoxMax);
+
+	cudaThreadSynchronize();
+
+	mContext->ClearRenderTargetView(mBackBufferRTV.Get(), DirectX::Colors::Blue);
+	mContext->Unmap(mRenderTexture.Get(), 0);
 }
 
 void PathTracer::Render(float delta)
 {
-
+	drawScreen();
 	mSwapchain->Present(1, 0);
+	mFrameIndex++;
+
 }
 
 void PathTracer::Release()
 {
+	cuGraphicsMapResources(1, &mCudaRenderTexture, 0);
+	cuSurfObjectDestroy(mCudaRenderSurface);
 }
 
 __global__ void someGlobal()
@@ -71,14 +108,24 @@ __global__ void someGlobal()
 	return;
 }
 
-void PathTracer::startCuda()
+uint PathTracer::hashFrame(uint frame)
 {
-	someGlobal << < 1, 1, 1 >> > ();
+	frame = (frame ^ 61) ^ (frame >> 16);
+	frame = frame + (frame << 3);
+	frame = frame ^ (frame >> 4);
+	frame = frame * 0x27d4eb2d;
+	frame = frame ^ (frame >> 15);
 
+	return frame;
 }
 
 void PathTracer::loadAssets()
 {
+	mViewport = {};
+	mViewport.Width = mWidth;
+	mViewport.Height = mHeight;
+	mViewport.MaxDepth = 1.0f;
+
 	Throw(mSwapchain->GetBuffer(0, IID_PPV_ARGS(&mBackBuffer)));
 
 	D3D11_RENDER_TARGET_VIEW_DESC rtvDesc{};
@@ -98,8 +145,46 @@ void PathTracer::loadAssets()
 	cudaTextureDesc.BindFlags = D3D11_BIND_RENDER_TARGET;
 	cudaTextureDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
 	cudaTextureDesc.SampleDesc.Count = 1;
+	cudaTextureDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
 
 	Throw(mDevice->CreateTexture2D(&cudaTextureDesc, nullptr, mCudaSharedTexture.GetAddressOf()));
+	
+	D3D11_TEXTURE2D_DESC cudaRenderTextureDesc{};
+
+	cudaRenderTextureDesc.Width = mWidth;
+	cudaRenderTextureDesc.Height = mHeight;
+	cudaRenderTextureDesc.MipLevels = 1;
+	cudaRenderTextureDesc.ArraySize = 1;
+	cudaRenderTextureDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+	cudaRenderTextureDesc.Usage = D3D11_USAGE_DYNAMIC;
+	cudaRenderTextureDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE;
+	cudaRenderTextureDesc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+	cudaRenderTextureDesc.SampleDesc.Count = 1;
+
+	Throw(mDevice->CreateTexture2D(&cudaRenderTextureDesc, nullptr, mRenderTexture.GetAddressOf()));
+	cuGraphicsD3D11RegisterResource(&mCudaRenderTexture, mRenderTexture.Get(), CU_GRAPHICS_MAP_RESOURCE_FLAGS_NONE);
+	cuGraphicsResourceSetMapFlags(mCudaRenderTexture, CU_GRAPHICS_MAP_RESOURCE_FLAGS_WRITE_DISCARD);
+
+	cuGraphicsMapResources(1, &mCudaRenderTexture, 0);
+
+	CUarray retArray;
+
+	CUDA_RESOURCE_DESC cuReourceDesc{};
+
+	cuReourceDesc.resType = CU_RESOURCE_TYPE_ARRAY;
+	cuReourceDesc.res.array.hArray = retArray;
+	cuSurfObjectCreate(&mCudaRenderSurface, &cuReourceDesc);
+
+
+
+
+	D3D11_SHADER_RESOURCE_VIEW_DESC renderTextureSrvDesc{};
+
+	renderTextureSrvDesc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+	renderTextureSrvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+	renderTextureSrvDesc.Texture2D.MipLevels = 1;
+	Throw(mDevice->CreateShaderResourceView(mRenderTexture.Get(), &renderTextureSrvDesc, mRenderTextureSRV.GetAddressOf()));
+
 
 	std::string meshPath = GetWorkingDirectoryA();
 	meshPath += "..\\..\\CUDAPathTracer\\resources\\shiba\\shiba.fbx";
@@ -107,7 +192,92 @@ void PathTracer::loadAssets()
 
 	extractTrianglesFromVertices(loader.Vertices, loader.Indices, mMeshTriangles);
 
+	makeScreen();
 
+}
+
+void PathTracer::makeScreen()
+{
+	ScreenVertex vertices[] =
+	{
+		{ {-1, -1, 0}, {0,0}},
+		{ {1, -1, 0}, {1,0}},
+		{ {-1, 1, 0}, {0,1}},
+		{ {1, 1, 0}, {1,1}},
+	};
+
+	uint indices[] =
+	{
+		2,1,0,
+		2,3,1
+	};
+	
+	D3D11_BUFFER_DESC vbDesc{}, ibDesc{};
+	D3D11_SUBRESOURCE_DATA vbSub{}, ibSub{};
+
+	vbDesc.ByteWidth = sizeof(ScreenVertex) * 4;
+	vbDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+	vbSub.pSysMem = vertices;
+
+	ibDesc.ByteWidth = sizeof(unsigned int) * 6;
+	ibDesc.BindFlags = D3D11_BIND_INDEX_BUFFER;
+	ibSub.pSysMem = indices;
+
+	D3D11_INPUT_ELEMENT_DESC inputElements[] =
+	{
+		{"POSITION",0, DXGI_FORMAT_R32G32B32_FLOAT, 0,0, D3D11_INPUT_PER_VERTEX_DATA, 0},
+		{"TEXCOORD",0, DXGI_FORMAT_R32G32_FLOAT, 0,0xFFFFFFFF, D3D11_INPUT_PER_VERTEX_DATA, 0},
+	};
+
+	ID3DBlob* vBlob, * pBlob, * errBlob;
+
+	Throw(mDevice->CreateBuffer(&vbDesc, &vbSub, mScreenVB.GetAddressOf()));
+	Throw(mDevice->CreateBuffer(&ibDesc, &ibSub, mScreenIB.GetAddressOf()));
+
+	std::wstring shaderPath = GetWorkingDirectoryW();
+
+	shaderPath += L"..\\..\\CUDAPathTracer\\resources\\Screen.hlsl";
+
+#ifdef _DEBUG
+	DWORD compileFlag = D3DCOMPILE_DEBUG;
+#else
+	DWORD compileFlag = 0;
+
+#endif
+
+	Throw(D3DCompileFromFile(shaderPath.c_str(), nullptr, nullptr, "vert", "vs_4_0", compileFlag, 0, &vBlob, &errBlob));
+	Throw(D3DCompileFromFile(shaderPath.c_str(), nullptr, nullptr, "frag", "ps_5_0", compileFlag, 0, &pBlob, &errBlob));
+	Throw(mDevice->CreateVertexShader(vBlob->GetBufferPointer(), vBlob->GetBufferSize(), nullptr, mScreenVS.GetAddressOf()));
+	Throw(mDevice->CreatePixelShader(pBlob->GetBufferPointer(), pBlob->GetBufferSize(), nullptr, mScreenPS.GetAddressOf()));
+	Throw(mDevice->CreateInputLayout(inputElements, 2, vBlob->GetBufferPointer(), vBlob->GetBufferSize(), mScreenIL.GetAddressOf()));
+}
+
+void PathTracer::drawScreen()
+{
+	static ID3D11ShaderResourceView* nullSrv[] = { nullptr };
+	static ID3D11RenderTargetView* nullRtv[] = { nullptr };
+	static uint strides[] = {sizeof(ScreenVertex) };
+	static uint offsets[] = { 0 };
+
+	mContext->IASetVertexBuffers(0, 1, mScreenVB.GetAddressOf(), strides, offsets);
+
+	mContext->IASetIndexBuffer(mScreenIB.Get(), DXGI_FORMAT_R32_UINT, 0);
+	mContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	mContext->IASetInputLayout(mScreenIL.Get());
+
+	mContext->OMSetRenderTargets(1, mBackBufferRTV.GetAddressOf(), nullptr);
+
+	mContext->VSSetShader(mScreenVS.Get(), nullptr, 0);
+	mContext->PSSetShader(mScreenPS.Get(), nullptr, 0);
+	mContext->PSSetShaderResources(0, 1, mRenderTextureSRV.GetAddressOf());
+
+	mContext->DrawIndexed(6, 0, 0);
+
+	mContext->OMSetRenderTargets(1, nullRtv, nullptr);
+
+	mContext->RSSetViewports(1, &mViewport);
+
+	mContext->PSSetShaderResources(0, 1, nullSrv);
 }
 
 cudaExternalMemory_t PathTracer::importNTHandle(HANDLE handle, address64 size)
@@ -164,8 +334,8 @@ void PathTracer::extractTrianglesFromVertices(std::vector<Vertex>& vertices, std
 		mMeshTriangles.push_back(XMFLOAT4(position3.x - position2.x, position3.y - position2.y, position3.z - position2.z, 0.0f));
 	}
 
-	mMeshBoundingBox[0] = XMFLOAT3(1250.0f, 1250.0f, 1250.0f);
-	mMeshBoundingBox[1] = XMFLOAT3(-1250.0f, -1250.0f, -1250.0f);
+	mMeshBoundingBox[0] = make_float3(1250.0f, 1250.0f, 1250.0f);
+	mMeshBoundingBox[1] = make_float3(-1250.0f, -1250.0f, -1250.0f);
 
 	long long triangleSize = indices.size() * sizeof(XMFLOAT3);
 	uint triangleCount = indices.size() / 3;
