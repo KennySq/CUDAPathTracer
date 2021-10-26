@@ -5,6 +5,10 @@
 #include "math_functions.h"
 #include"cuda.h"
 #include"cudaD3D11.h"
+#include"cuda_surface_types.h"
+
+
+#include"Math.cuh"
 
 #include<iostream>
 
@@ -13,12 +17,12 @@ using namespace DirectX;
 
 struct Ray
 {
-	__host__ __device__ Ray(XMFLOAT3 origin, XMFLOAT3 direction)
+	__host__ __device__ Ray(float3 origin, float3 direction)
 		: Origin(origin), Direction(direction)
 	{}
 
-	XMFLOAT3 Origin;
-	XMFLOAT3 Direction;
+	float3 Origin;
+	float3 Direction;
 };
 
 struct Triangle
@@ -35,6 +39,12 @@ enum eGeometryType
 
 class PathTracer : public DXSample
 {
+	struct ScreenVertex
+	{
+		XMFLOAT3 Position;
+		XMFLOAT2 Texcoord;
+	};
+
 public:
 	PathTracer();
 
@@ -49,12 +59,33 @@ private:
 	ComPtr<ID3D11Texture2D> mCudaSharedTexture;
 
 	std::vector<XMFLOAT4> mMeshTriangles;
-	XMFLOAT3 mMeshBoundingBox[2];
+	float3 mMeshBoundingBox[2];
 
-	void startCuda();
+	ComPtr<ID3D11Texture2D> mRenderTexture;
+	ComPtr<ID3D11ShaderResourceView> mRenderTextureSRV;
+	D3D11_MAPPED_SUBRESOURCE mRenderTextureMap;
+	CUgraphicsResource mCudaRenderTexture;
+	CUsurfObject mCudaRenderSurface;
+
+	uint mTriangleCount;
+	
+	ComPtr<ID3D11Buffer> mScreenVB;
+	ComPtr<ID3D11Buffer> mScreenIB;
+	ComPtr<ID3D11VertexShader> mScreenVS;
+	ComPtr<ID3D11PixelShader> mScreenPS;
+	ComPtr<ID3D11InputLayout> mScreenIL;
+
+	D3D11_VIEWPORT mViewport;
+
+	uint hashFrame(uint frame);
 	void loadAssets();
+	void makeScreen();
+
+	void drawScreen();
 
 	void extractTrianglesFromVertices(std::vector<Vertex>& vertices, std::vector<uint>& indices, std::vector<XMFLOAT4> triangles);
 
 	cudaExternalMemory_t importNTHandle(HANDLE handle, address64 size);
+
+	uint mFrameIndex = 0;
 };
