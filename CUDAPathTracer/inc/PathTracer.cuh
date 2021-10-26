@@ -3,9 +3,11 @@
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 #include "math_functions.h"
+#include"cudaTypedefs.h"
 #include"cuda.h"
 #include"cudaD3D11.h"
 #include"cuda_surface_types.h"
+#include"cuda_pipeline.h"
 
 
 #include"Math.cuh"
@@ -63,9 +65,13 @@ private:
 
 	ComPtr<ID3D11Texture2D> mRenderTexture;
 	ComPtr<ID3D11ShaderResourceView> mRenderTextureSRV;
-	D3D11_MAPPED_SUBRESOURCE mRenderTextureMap;
+	ComPtr<ID3D11UnorderedAccessView> mRenderTextureUAV;
 	CUgraphicsResource mCudaRenderTexture;
+
 	CUsurfObject mCudaRenderSurface;
+	
+	CUdevice mCudaDevice;
+	
 
 	uint mTriangleCount;
 	

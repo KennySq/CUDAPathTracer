@@ -30,13 +30,14 @@ void GetError(cudaError_t error)
 PathTracer::PathTracer()
 	: DXSample(1280, 720, "CUDA PathTracer")
 {
-
+	cudaDeviceSynchronize();
+	//cuCtxCreate()
 }
 
-__global__ void kernelRender(float4* outTexture, const uint triCount, uint frameIndex, uint hashFrameIndex, float fovRadians, uint width, uint height, float3 sceneMinBound, float3 sceneMaxBound)
+__global__ void kernelRender(CUsurfObject surf, float4* outTexture, const uint triCount, uint frameIndex, uint hashFrameIndex, float fovRadians, uint width, uint height, float3 sceneMinBound, float3 sceneMaxBound)
 {
-	uint x = blockIdx.x * blockDim.x + threadIdx.y;
-	uint y = blockIdx.y * blockDim.y + threadIdx.y;
+	uint x = blockDim.x * blockIdx.x + threadIdx.x; ///blockDim.x * blockIdx.y + threadIdx.x;
+	uint y = blockDim.y * blockIdx.y + threadIdx.y;
 
 	float3 camPos = make_float3(-25.0f, 0.0f, -25.0f);
 	float3 camDir = Normalize(camPos - make_float3(0, 0, 0));
@@ -49,9 +50,10 @@ __global__ void kernelRender(float4* outTexture, const uint triCount, uint frame
 	float4 result = { 0,0,0,0 };
 
 	int pixelIndex = (height - y - 1) * width + x;
-	
-	outTexture[pixelIndex] = make_float4(0, 1, 0, 0);
-}
+
+	float4 value = make_float4(0, 1, 1, 0);
+	surf2Dwrite<float4>(value, surf, x * sizeof(float4), y);
+}	
 
 void PathTracer::Awake()
 {
@@ -73,19 +75,20 @@ void PathTracer::Update(float delta)
 	dim3 grid = dim3(mWidth / block.x, mHeight / block.y, 1);
 
 	uint hashedFrame = hashFrame(mFrameIndex);
-	mContext->Map(mRenderTexture.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mRenderTextureMap);
-	cudaRenderTexture = reinterpret_cast<float4*>(mRenderTextureMap.pData);
 
-	kernelRender << < grid, block >> > (cudaRenderTexture, mTriangleCount, mFrameIndex, hashedFrame, XMConvertToRadians(90.0f), mWidth, mHeight, cudaSceneBoundBoxMin, cudaSceneBoundBoxMax);
+	kernelRender << < grid, block >> > (mCudaRenderSurface, cudaRenderTexture, mTriangleCount, mFrameIndex, hashedFrame, XMConvertToRadians(90.0f), mWidth, mHeight, cudaSceneBoundBoxMin, cudaSceneBoundBoxMax);
 
 	cudaThreadSynchronize();
 
 	mContext->ClearRenderTargetView(mBackBufferRTV.Get(), DirectX::Colors::Blue);
-	mContext->Unmap(mRenderTexture.Get(), 0);
 }
 
 void PathTracer::Render(float delta)
 {
+	cudaError_t error = cudaGetLastError();
+	std::cout <<cudaGetErrorString(error) << '\n';
+
+
 	drawScreen();
 	mSwapchain->Present(1, 0);
 	mFrameIndex++;
@@ -94,7 +97,7 @@ void PathTracer::Render(float delta)
 
 void PathTracer::Release()
 {
-	cuGraphicsMapResources(1, &mCudaRenderTexture, 0);
+	cuGraphicsUnmapResources(1, &mCudaRenderTexture, 0);
 	cuSurfObjectDestroy(mCudaRenderSurface);
 }
 
@@ -143,9 +146,7 @@ void PathTracer::loadAssets()
 	cudaTextureDesc.ArraySize = 1;
 	cudaTextureDesc.MipLevels = 1;
 	cudaTextureDesc.BindFlags = D3D11_BIND_RENDER_TARGET;
-	cudaTextureDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
 	cudaTextureDesc.SampleDesc.Count = 1;
-	cudaTextureDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
 
 	Throw(mDevice->CreateTexture2D(&cudaTextureDesc, nullptr, mCudaSharedTexture.GetAddressOf()));
 	
@@ -155,28 +156,12 @@ void PathTracer::loadAssets()
 	cudaRenderTextureDesc.Height = mHeight;
 	cudaRenderTextureDesc.MipLevels = 1;
 	cudaRenderTextureDesc.ArraySize = 1;
-	cudaRenderTextureDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-	cudaRenderTextureDesc.Usage = D3D11_USAGE_DYNAMIC;
 	cudaRenderTextureDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE;
 	cudaRenderTextureDesc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
 	cudaRenderTextureDesc.SampleDesc.Count = 1;
-
+	
 	Throw(mDevice->CreateTexture2D(&cudaRenderTextureDesc, nullptr, mRenderTexture.GetAddressOf()));
-	cuGraphicsD3D11RegisterResource(&mCudaRenderTexture, mRenderTexture.Get(), CU_GRAPHICS_MAP_RESOURCE_FLAGS_NONE);
-	cuGraphicsResourceSetMapFlags(mCudaRenderTexture, CU_GRAPHICS_MAP_RESOURCE_FLAGS_WRITE_DISCARD);
-
-	cuGraphicsMapResources(1, &mCudaRenderTexture, 0);
-
-	CUarray retArray;
-
-	CUDA_RESOURCE_DESC cuReourceDesc{};
-
-	cuReourceDesc.resType = CU_RESOURCE_TYPE_ARRAY;
-	cuReourceDesc.res.array.hArray = retArray;
-	cuSurfObjectCreate(&mCudaRenderSurface, &cuReourceDesc);
-
-
-
+	
 
 	D3D11_SHADER_RESOURCE_VIEW_DESC renderTextureSrvDesc{};
 
@@ -184,6 +169,39 @@ void PathTracer::loadAssets()
 	renderTextureSrvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
 	renderTextureSrvDesc.Texture2D.MipLevels = 1;
 	Throw(mDevice->CreateShaderResourceView(mRenderTexture.Get(), &renderTextureSrvDesc, mRenderTextureSRV.GetAddressOf()));
+
+	D3D11_UNORDERED_ACCESS_VIEW_DESC renderTextureUavDesc{};
+
+	renderTextureUavDesc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+	renderTextureUavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+	renderTextureUavDesc.Texture2D.MipSlice = 0;
+
+	Throw(mDevice->CreateUnorderedAccessView(mRenderTexture.Get(), &renderTextureUavDesc, mRenderTextureUAV.GetAddressOf()));
+	
+	
+	CUresult curesult;
+	curesult = cuGraphicsD3D11RegisterResource(&mCudaRenderTexture, mRenderTexture.Get(), CU_GRAPHICS_MAP_RESOURCE_FLAGS_NONE);
+	cuGraphicsResourceSetMapFlags(mCudaRenderTexture, CU_GRAPHICS_MAP_RESOURCE_FLAGS_WRITE_DISCARD);
+
+
+	const char* errorStr = "Hello";
+	curesult = cuGraphicsMapResources(1, &mCudaRenderTexture, 0);
+	cuGetErrorString(curesult, &errorStr);
+
+	CUarray retArray;
+	curesult = cuGraphicsSubResourceGetMappedArray(&retArray, mCudaRenderTexture, 0, 0);
+	
+
+	cuGetErrorString(curesult, &errorStr);
+
+	
+	CUDA_RESOURCE_DESC cuReourceDesc{};
+	
+	cuReourceDesc.resType = CU_RESOURCE_TYPE_ARRAY;
+	cuReourceDesc.res.array.hArray = retArray;
+	cuSurfObjectCreate(&mCudaRenderSurface, &cuReourceDesc);
+		
+
 
 
 	std::string meshPath = GetWorkingDirectoryA();
