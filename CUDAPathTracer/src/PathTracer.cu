@@ -95,6 +95,34 @@ __device__ float3 radiance(Ray& r, curandState* randState, const int triangleCou
 	float3 tempColor = make_float3(0.0f, 0.0f, 0.0f);
 
 	float t = 100000;
+	
+	//if(intersectScene(r, t, ))
+
+}
+
+__device__ inline bool intersectScene(const Ray& r, float& t, int& sphereID, int& triangleID, const int triCount, const float3& boundMin, const float3& boundMax)
+{
+	float tMin = 1e20;
+	float tMax = -1e20;
+
+	float d = 1e21;
+	float k = 1e21;
+	float q = 1e21;
+
+	float inf = t = 1e20;
+
+	float sphereCount = sizeof(spheres) / sizeof(Sphere);
+
+	for (int i = int(sphereCount); i > 0; i--)
+	{
+		if ((d = spheres[i].intersect(r)) && k < t)
+		{
+			t = k;
+			sphereID = i;
+		}
+	}
+
+
 
 }
 
@@ -136,9 +164,9 @@ __global__ void kernelRender(CUsurfObject surf, float4* outTexture, const uint t
 
 //		value = make_float4(d.x,d.y,d.z, 1.0f);
 	
-		//float3 color = radiance(r, &randState, triCount, sceneMinBound, sceneMaxBound);
-		//value = make_float4(color.x, color.y, color.z, 1.0f);
-		value = make_float4(d.x, d.y, d.z, 1.0f);
+		float3 color = radiance(r, &randState, triCount, sceneMinBound, sceneMaxBound);
+		value = make_float4(color.x, color.y, color.z, 1.0f);
+		//value = make_float4(d.x, d.y, d.z, 1.0f);
 	}
 
 
@@ -354,7 +382,7 @@ void PathTracer::makeScreen()
 
 #endif
 
-	Throw(D3DCompileFromFile(shaderPath.c_str(), nullptr, nullptr, "vert", "vs_4_0", compileFlag, 0, &vBlob, &errBlob));
+	Throw(D3DCompileFromFile(shaderPath.c_str(), nullptr, nullptr, "vert", "vs_5_0", compileFlag, 0, &vBlob, &errBlob));
 	Throw(D3DCompileFromFile(shaderPath.c_str(), nullptr, nullptr, "frag", "ps_5_0", compileFlag, 0, &pBlob, &errBlob));
 	Throw(mDevice->CreateVertexShader(vBlob->GetBufferPointer(), vBlob->GetBufferSize(), nullptr, mScreenVS.GetAddressOf()));
 	Throw(mDevice->CreatePixelShader(pBlob->GetBufferPointer(), pBlob->GetBufferSize(), nullptr, mScreenPS.GetAddressOf()));
@@ -466,6 +494,4 @@ void PathTracer::extractTrianglesFromVertices(std::vector<Vertex>& vertices, std
 
 	cudaSceneBoundBoxMax = mMeshBoundingBox[0];
 	cudaSceneBoundBoxMin = mMeshBoundingBox[1];
-
-
 }
