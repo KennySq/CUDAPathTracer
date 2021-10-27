@@ -86,7 +86,6 @@ PathTracer::PathTracer()
 	: DXSample(1280, 720, "CUDA PathTracer")
 {
 	cudaDeviceSynchronize();
-	//cuCtxCreate()
 }
 
 __device__ float3 radiance(Ray& r, curandState* randState, const int triangleCount, const float3& sceneMinBound, const float3& sceneMaxBound)
@@ -95,9 +94,33 @@ __device__ float3 radiance(Ray& r, curandState* randState, const int triangleCou
 	float3 tempColor = make_float3(0.0f, 0.0f, 0.0f);
 
 	float t = 100000;
-	
-	//if(intersectScene(r, t, ))
+	int sphereID = -1;
+	int triangleID = -1;
 
+	float3 f; // primitive color?
+	float3 emit; // primitive emissive color?
+	float3 hit; //intersection point
+	float3 normal; // normal
+	float3 orientedNormal; // corrected normal
+	float3 d; // next ray direction
+	
+	if (intersectScene(r, t, sphereID, triangleID, triangleCount, sceneMinBound, sceneMaxBound) == false)
+	{
+		return make_float3(0, 0, 0);
+	}
+
+	Sphere& sphere = spheres[sphereID];
+
+	hit = r.Origin + r.Direction * t;
+	normal = Normalize(hit - sphere.pos);
+
+	orientedNormal = Dot(normal, r.Direction) < 0 ? normal : normal * -1;
+	f = sphere.col;
+	emit = sphere.emi;
+
+	tempColor += (mask * emit);
+
+	
 }
 
 __device__ inline bool intersectScene(const Ray& r, float& t, int& sphereID, int& triangleID, const int triCount, const float3& boundMin, const float3& boundMax)
@@ -115,6 +138,8 @@ __device__ inline bool intersectScene(const Ray& r, float& t, int& sphereID, int
 
 	for (int i = int(sphereCount); i > 0; i--)
 	{
+		
+
 		if ((d = spheres[i].intersect(r)) && k < t)
 		{
 			t = k;
@@ -220,16 +245,11 @@ void PathTracer::Release()
 	cuSurfObjectDestroy(mCudaRenderSurface);
 }
 
-__global__ void someGlobal()
-{
-	if (threadIdx.x == 0)
-	{
-		printf("%s\n", "Hello");
-	}
-
-	return;
-}
-
+// 프레임 해싱에 대한 코드입니다.
+// cuRand가 thread 마다 랜덤한 값을 부여해야하기 때문에
+// frame 해싱 값을 기준으로 각 threadid를
+// 더해 매 프레임마다, 각 스레드에 대해 고유한 값을 생성합니다.
+// reference : https://www.reedbeta.com/blog/quick-and-easy-gpu-random-numbers-in-d3d11/
 uint PathTracer::hashFrame(uint frame)
 {
 	frame = (frame ^ 61) ^ (frame >> 16);
@@ -241,6 +261,7 @@ uint PathTracer::hashFrame(uint frame)
 	return frame;
 }
 
+// 렌더링에 필요한 모든 자원들을 초기화하는 단계입니다.
 void PathTracer::loadAssets()
 {
 	mViewport = {};
@@ -333,6 +354,7 @@ void PathTracer::loadAssets()
 
 }
 
+// 화면을 생성하는 코드입니다.
 void PathTracer::makeScreen()
 {
 	ScreenVertex vertices[] =
@@ -389,6 +411,7 @@ void PathTracer::makeScreen()
 	Throw(mDevice->CreateInputLayout(inputElements, 2, vBlob->GetBufferPointer(), vBlob->GetBufferSize(), mScreenIL.GetAddressOf()));
 }
 
+// 화면을 그립니다.
 void PathTracer::drawScreen()
 {
 	static ID3D11ShaderResourceView* nullSrv[] = { nullptr };
@@ -461,22 +484,29 @@ void PathTracer::extractTrianglesFromVertices(std::vector<Vertex>& vertices, std
 		uint index2 = indices[i+1];
 		uint index3 = indices[i+2];
 
+		// 각 삼각형 인덱스에 해당하는 모든 정점들을 읽어옵니다.
 		XMFLOAT4 position1 = XMFLOAT4(vertices[index1].mPosition.x, vertices[index1].mPosition.y, vertices[index1].mPosition.z, 1.0f);
 		XMFLOAT4 position2 = XMFLOAT4(vertices[index2].mPosition.x, vertices[index2].mPosition.y, vertices[index2].mPosition.z, 1.0f);
 		XMFLOAT4 position3 = XMFLOAT4(vertices[index3].mPosition.x, vertices[index3].mPosition.y, vertices[index3].mPosition.z, 1.0f);
 
-		// pre-edge calculation, edge를 미리 계산하여 Path-tracing 시의 GPU 연산 부하를 줄입니다.
+		// pre-edge calculation
+		// static mesh의 경우 edge는 한 번만 계산하면 되기 때문에
+		// 미리 계산하여 kernel 호출 시의 GPU 연산 부하를 줄입니다.
 		mMeshTriangles.push_back(XMFLOAT4(position1.x, position1.y, position1.z, 0.0f));
 		mMeshTriangles.push_back(XMFLOAT4(position2.x - position1.x, position2.y - position1.y, position2.z - position1.z, 1.0f));
 		mMeshTriangles.push_back(XMFLOAT4(position3.x - position2.x, position3.y - position2.y, position3.z - position2.z, 0.0f));
 	}
 
+
+	// 임의로 초기화된 바운딩 박스
 	mMeshBoundingBox[0] = make_float3(1250.0f, 1250.0f, 1250.0f);
 	mMeshBoundingBox[1] = make_float3(-1250.0f, -1250.0f, -1250.0f);
 
 	long long triangleSize = indices.size() * sizeof(XMFLOAT3);
 	uint triangleCount = indices.size() / 3;
 
+	// 모든 삼각형 정보를 cudaTexture 1D 에 추가합니다.
+	// 이 과정도 static mesh라면 한 번만 계산합니다.
 	if (triangleSize > 0)
 	{
 		cudaError_t error = cudaMalloc(&cudaTriangles, triangleSize);
