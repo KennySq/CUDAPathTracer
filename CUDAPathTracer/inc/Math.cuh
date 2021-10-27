@@ -5,6 +5,11 @@
 
 #define PI 3.14159265359f
 
+inline __host__ __device__ float3 absf3(float3 v)
+{
+	return make_float3(fabs(v.x), fabs(v.y), fabs(v.z));
+}
+
 inline __host__ __device__ float InverseSqrt(float x)
 {
 	return 1.0f / sqrt(x);
