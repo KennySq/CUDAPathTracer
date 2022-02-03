@@ -88,6 +88,34 @@ PathTracer::PathTracer()
 	cudaDeviceSynchronize();
 }
 
+__device__ inline bool intersectScene(const Ray& r, float& t, int& sphereID, int& triangleID, const int triCount, const float3& boundMin, const float3& boundMax)
+{
+	float tMin = 1e20;
+	float tMax = -1e20;
+
+	float d = 1e21;
+	float k = 1e21;
+	float q = 1e21;
+
+	float inf = t = 1e20;
+
+	float sphereCount = sizeof(spheres) / sizeof(Sphere);
+
+	for (int i = int(sphereCount); i > 0; i--)
+	{
+
+
+		if ((d = spheres[i].intersect(r)) && k < t)
+		{
+			t = k;
+			sphereID = i;
+		}
+	}
+
+
+
+}
+
 __device__ float3 radiance(Ray& r, curandState* randState, const int triangleCount, const float3& sceneMinBound, const float3& sceneMaxBound)
 {
 	float3 mask = make_float3(1.0f, 1.0f, 1.0f);
@@ -117,39 +145,21 @@ __device__ float3 radiance(Ray& r, curandState* randState, const int triangleCou
 	orientedNormal = Dot(normal, r.Direction) < 0 ? normal : normal * -1;
 	f = sphere.col;
 	emit = sphere.emi;
-
 	tempColor += (mask * emit);
 
-	
+	// compute 2 random numbers
+	float r1 = 2 * PI * curand_uniform(randState);
+	float r2 = curand_uniform(randState);
+	float r2s = sqrtf(r2);
+
+	float3 w = orientedNormal;
+	float3 u = Normalize(Cross(fabs(w.x) > .1 ? make_float3(0, 1, 0) : make_float3(1, 0, 0), w));
+	float3 v = Cross(w, u);
+
+	return hit;
 }
 
-__device__ inline bool intersectScene(const Ray& r, float& t, int& sphereID, int& triangleID, const int triCount, const float3& boundMin, const float3& boundMax)
-{
-	float tMin = 1e20;
-	float tMax = -1e20;
 
-	float d = 1e21;
-	float k = 1e21;
-	float q = 1e21;
-
-	float inf = t = 1e20;
-
-	float sphereCount = sizeof(spheres) / sizeof(Sphere);
-
-	for (int i = int(sphereCount); i > 0; i--)
-	{
-		
-
-		if ((d = spheres[i].intersect(r)) && k < t)
-		{
-			t = k;
-			sphereID = i;
-		}
-	}
-
-
-
-}
 
 __global__ void kernelRender(CUsurfObject surf, float4* outTexture, const uint triCount, uint frameIndex, uint hashFrameIndex, float fovRadians, uint width, uint height, float3 sceneMinBound, float3 sceneMaxBound)
 {
@@ -194,8 +204,6 @@ __global__ void kernelRender(CUsurfObject surf, float4* outTexture, const uint t
 		//value = make_float4(d.x, d.y, d.z, 1.0f);
 	}
 
-
-
 	surf2Dwrite<float4>(value, surf, x * sizeof(float4), y);
 }	
 
@@ -220,7 +228,9 @@ void PathTracer::Update(float delta)
 
 	uint hashedFrame = hashFrame(mFrameIndex);
 
-	kernelRender << < grid, block >> > (mCudaRenderSurface, cudaRenderTexture, mTriangleCount, mFrameIndex, hashedFrame, XMConvertToRadians(90.0f), mWidth, mHeight, cudaSceneBoundBoxMin, cudaSceneBoundBoxMax);
+	kernelRender << < grid, block >> > (mCudaRenderSurface, cudaRenderTexture, 
+		mTriangleCount, mFrameIndex, hashedFrame, XMConvertToRadians(90.0f),
+		mWidth, mHeight, cudaSceneBoundBoxMin, cudaSceneBoundBoxMax);
 
 	cudaThreadSynchronize();
 
@@ -230,8 +240,7 @@ void PathTracer::Update(float delta)
 void PathTracer::Render(float delta)
 {
 	cudaError_t error = cudaGetLastError();
-	std::cout <<cudaGetErrorString(error) << '\n';
-
+	//std::cout <<cudaGetErrorString(error) << '\n';
 
 	drawScreen();
 	mSwapchain->Present(1, 0);
@@ -416,7 +425,7 @@ void PathTracer::drawScreen()
 {
 	static ID3D11ShaderResourceView* nullSrv[] = { nullptr };
 	static ID3D11RenderTargetView* nullRtv[] = { nullptr };
-	static uint strides[] = {sizeof(ScreenVertex) };
+	static uint strides[] = { sizeof(ScreenVertex) };
 	static uint offsets[] = { 0 };
 
 	mContext->IASetVertexBuffers(0, 1, mScreenVB.GetAddressOf(), strides, offsets);
@@ -431,11 +440,11 @@ void PathTracer::drawScreen()
 	mContext->PSSetShader(mScreenPS.Get(), nullptr, 0);
 	mContext->PSSetShaderResources(0, 1, mRenderTextureSRV.GetAddressOf());
 
+	mContext->RSSetViewports(1, &mViewport);
+
 	mContext->DrawIndexed(6, 0, 0);
 
 	mContext->OMSetRenderTargets(1, nullRtv, nullptr);
-
-	mContext->RSSetViewports(1, &mViewport);
 
 	mContext->PSSetShaderResources(0, 1, nullSrv);
 }
@@ -468,7 +477,7 @@ extern "C"
 
 		long long size = sizeof(XMFLOAT4) * triangleCount * 3;
 
-		cudaChannelFormatDesc channelDesc = cudaCreateChannelDesc<XMFLOAT4>();
+		cudaChannelFormatDesc channelDesc = cudaCreateChannelDesc<float4>();
 
 		cudaError_t error = cudaBindTexture(nullptr, &cudaTriangleTexture, triangles, &channelDesc, size);
 		GetError(error);

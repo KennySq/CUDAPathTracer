@@ -6,9 +6,24 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\DXSample.cpp" />
+    <ClCompile Include="src\Window.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="inc\WinUtil.h" />
     <ClInclude Include="inc\PathTracer.cuh" />
+    <ClInclude Include="inc\DXSample.h" />
+    <ClInclude Include="inc\Math.cuh" />
+    <ClInclude Include="inc\stdafx.h" />
+    <ClInclude Include="inc\Window.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Assets">
+      <UniqueIdentifier>{06f08cd3-3792-4341-b05c-10e856ad54d9}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="resources\Screen.hlsl">
+      <Filter>Assets</Filter>
+    </None>
   </ItemGroup>
 </Project>
