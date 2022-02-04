@@ -10,11 +10,11 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="inc\WinUtil.h" />
-    <ClInclude Include="inc\PathTracer.cuh" />
     <ClInclude Include="inc\DXSample.h" />
     <ClInclude Include="inc\Math.cuh" />
     <ClInclude Include="inc\stdafx.h" />
     <ClInclude Include="inc\Window.h" />
+    <ClInclude Include="inc\PathTracer.cuh" />
   </ItemGroup>
   <ItemGroup>
     <Filter Include="Assets">

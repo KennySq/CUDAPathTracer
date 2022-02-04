@@ -49,6 +49,11 @@ inline __host__ __device__ float3 operator*(float3 v, float s)
 	return make_float3(v.x * s, v.y * s, v.z * s);
 }
 
+inline __host__ __device__ float3 operator/(float3 v, float s)
+{
+	return make_float3(v.x / s, v.y / s, v.z / s);
+}
+
 inline __host__ __device__ float3 Normalize(float3 v)
 {
 	float len = InverseSqrt(Dot(v, v));
