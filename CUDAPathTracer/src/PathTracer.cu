@@ -16,7 +16,7 @@ struct Ray
 	}
 
 	float3 Origin;
-	float3 Direction;	
+	float3 Direction;
 };
 
 struct Sphere
@@ -44,9 +44,43 @@ struct Sphere
 	}
 };
 
-__constant__ Sphere Spheres[] = 
+struct Plane
+{
+	float3 Center;
+	float3 Normal;
+	float Length;
+
+	//__device__ __host__ Plane(float3 center, float3 normal, float length)
+	//	: Center(center), Normal(normal), Length(length)
+	//{
+
+	//}
+
+	__device__ float Intersect(const Ray& r) const
+	{
+		float denom = Dot(r.Direction, Normal);
+
+		if (denom > 1e-6)
+		{
+			float numer = Dot(Center - r.Origin, Normal);
+			float t = (numer / denom) / Center.z;
+
+			return t;
+		}
+
+		return 0;
+	}
+
+};
+
+__constant__ Sphere Spheres[] =
 {
 	{0.25f, {0,0,0}, {0,0,0}, {1,0,0} },
+};
+
+__constant__ Plane Planes[] =
+{
+	{{0.0f, 0.0f, 10.0f},{0.0f, 0.0f, 1.0f}, 1.0f},
 };
 
 void PathTracer::Awake()
@@ -130,8 +164,8 @@ void PathTracer::Awake()
 	cuReourceDesc.resType = CU_RESOURCE_TYPE_ARRAY;
 	cuReourceDesc.res.array.hArray = retArray;
 	CUresult cuResult = cuSurfObjectCreate(&mCudaRenderSurface, &cuReourceDesc);
-	
-	
+
+
 	//std::string meshPath = GetWorkingDirectoryA();
 	//meshPath += "..\\..\\CUDAPathTracer\\resources\\shiba\\shiba.fbx";
 	//FbxLoader loader(meshPath.c_str());
@@ -150,19 +184,24 @@ __global__ void KernelIntersectScene(CUsurfObject surface, unsigned int width, u
 	int y = blockDim.y * blockIdx.y + threadIdx.y;
 
 	float3 origin = make_float3(0, 0, -1);
-	float3 rayDir = Normalize(Spheres[0].Position - origin);
+	float3 rayDir = Normalize(make_float3(0,0,0) - origin);
 
 	Ray r = Ray(origin, rayDir);
-	float3 uv = make_float3(x / (float)width, y / (float)height, 0.0f) - make_float3(0.5f, 0.5f, 0.0f);
+	float3 uv = make_float3((float)x / (float)width, (float)y / (float)height, 0.0f) - make_float3(0.5f, 0.5f, 0.0f);
 	uv.x *= 1.777f;
 	float3 dir = r.Direction + uv;
 	r.Direction = dir;
+	float4 color = make_float4(0, 0, 0, 0);
 
-	float dist = Spheres[0].Intersect(r);
+	float dist = Planes[0].Intersect(r);
 
-	float3 at = r.Origin + r.Direction * fabs(dist);
+	if (dist > 0.0f)
+	{
+		float3 at = r.Origin + r.Direction * dist;
 
-	float4 color = make_float4(at.x, at.y, at.z, 1.0f);
+		color = make_float4(1.0f, 0.0f, 0.0f, 1.0f);
+	}
+
 
 	surf2Dwrite<float4>(color, surface, x * sizeof(float4), y);
 
@@ -173,7 +212,7 @@ void PathTracer::Render(float delta)
 	dim3 block = dim3(16, 16, 1);
 	dim3 grid = dim3(mWidth / block.y, mHeight / block.y, 1);
 
-	KernelIntersectScene<<<grid, block>>>(mCudaRenderSurface, mWidth, mHeight);
+	KernelIntersectScene << <grid, block >> > (mCudaRenderSurface, mWidth, mHeight);
 	drawScreen();
 
 	cudaDeviceSynchronize();
