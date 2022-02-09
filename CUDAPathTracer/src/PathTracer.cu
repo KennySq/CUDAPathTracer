@@ -50,25 +50,19 @@ struct Plane
 	float3 Normal;
 	float Length;
 
-	//__device__ __host__ Plane(float3 center, float3 normal, float length)
-	//	: Center(center), Normal(normal), Length(length)
-	//{
-
-	//}
-
-	__device__ float Intersect(const Ray& r) const
+	__device__ bool Intersect(const Ray& r) const
 	{
-		float denom = Dot(r.Direction, Normal);
+		float denom = Dot(Normal, r.Direction);
 
 		if (denom > 1e-6)
 		{
 			float numer = Dot(Center - r.Origin, Normal);
-			float t = (numer / denom) / Center.z;
-
-			return t;
+			float t = (numer / denom);
+			
+			return t > 1e-6;
 		}
 
-		return 0;
+		return false;
 	}
 
 };
@@ -80,7 +74,7 @@ __constant__ Sphere Spheres[] =
 
 __constant__ Plane Planes[] =
 {
-	{{0.0f, 0.0f, 10.0f},{0.0f, 0.0f, 1.0f}, 1.0f},
+	{{0.0f, 0.0f, 10.0f},{0.0f, 0.0f, 1.0f }, 1.0f},
 };
 
 void PathTracer::Awake()
@@ -183,28 +177,32 @@ __global__ void KernelIntersectScene(CUsurfObject surface, unsigned int width, u
 	int x = blockDim.x * blockIdx.x + threadIdx.x;
 	int y = blockDim.y * blockIdx.y + threadIdx.y;
 
-	float3 origin = make_float3(0, 0, -1);
-	float3 rayDir = Normalize(make_float3(0,0,0) - origin);
-
-	Ray r = Ray(origin, rayDir);
-	float3 uv = make_float3((float)x / (float)width, (float)y / (float)height, 0.0f) - make_float3(0.5f, 0.5f, 0.0f);
-	uv.x *= 1.777f;
-	float3 dir = r.Direction + uv;
-	r.Direction = dir;
+	float3 origin = make_float3(0, 0, -10);
+	float3 rayDir = make_float3(0, 0, 1);
 	float4 color = make_float4(0, 0, 0, 0);
 
-	float dist = Planes[0].Intersect(r);
+	Ray r = Ray(origin, rayDir);
+	float3 uv = make_float3(x / (float)width, y / (float)height, 0.0f);
 
-	if (dist > 0.0f)
+	float3 cx = make_float3(width * 1.5708f / (float)height, 0, 0);
+	float3 cy = Normalize(Cross(cx, rayDir)) * 1.5708f;
+
+	uv.x *= 1.777f;
+
+	float3 dir = (cx * ((.25f + x) / (float)width - .5f) + cy * ((.25f + y) / (float)height - .5f)) + r.Direction;
+	//float3 dir = Normalize(r.Direction + uv);
+
+	r.Direction = Normalize(dir);
+
+	color = make_float4(r.Direction.x, r.Direction.y, r.Direction.z, 1.0f);
+
+	bool bIntersect = Planes[0].Intersect(r);
+	if (bIntersect)
 	{
-		float3 at = r.Origin + r.Direction * dist;
-
 		color = make_float4(1.0f, 0.0f, 0.0f, 1.0f);
 	}
 
-
 	surf2Dwrite<float4>(color, surface, x * sizeof(float4), y);
-
 }
 
 void PathTracer::Render(float delta)
