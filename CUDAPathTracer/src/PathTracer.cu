@@ -44,13 +44,91 @@ struct Sphere
 	}
 };
 
+struct Box
+{
+	float3 Center;
+	float3 Extent;
+	float3 Direction;
+
+	__device__ bool Intersect(const Ray& r) const
+	{
+		auto swap = [](float& t0, float& t1)
+		{
+			float t = t0;
+			t0 = t1;
+			t1 = t;
+		};
+
+		float3 extent = Extent;
+
+		float3 min = Center - extent;
+		float3 max = Center + extent;
+
+		float tMin = (min.x - r.Origin.x) / r.Direction.x;
+		float tMax = (max.x - r.Origin.x) / r.Direction.x;
+
+		if (tMin > tMax)
+		{
+			swap(tMin, tMax);
+		}
+
+		float tyMin = (min.y - r.Origin.y) / r.Direction.y;
+		float tyMax = (max.y - r.Origin.y) / r.Direction.y;
+
+		if (tyMin > tyMax)
+		{
+			swap(tyMin, tyMax);
+		}
+
+		if ((tMin > tyMax) || (tyMin > tMax))
+		{
+			return false;
+		}
+
+		if (tyMin > tMin)
+		{
+			tMin = tyMin;
+		}
+
+		if (tyMax < tMax)
+		{
+			tMax = tyMax;
+		}
+
+		float tzMin = (min.z - r.Origin.z) / r.Direction.z;
+		float tzMax = (max.z - r.Origin.z) / r.Direction.z;
+
+		if (tzMin > tzMax)
+		{
+			swap(tzMin, tzMax);
+		}
+
+		if ((tMin > tzMax) || (tzMin > tMax))
+		{
+			return false;
+		}
+
+		if (tzMin > tMin)
+		{
+			tMin = tzMin;
+		}
+
+		if (tzMax < tMax)
+		{
+			tMax = tzMax;
+		}
+
+		return true;
+	}
+};
+
 struct Plane
 {
 	float3 Center;
 	float3 Normal;
 	float Length;
 
-	__device__ bool Intersect(const Ray& r) const
+	__device__ float Intersect(const Ray& r) const
 	{
 		float denom = Dot(Normal, r.Direction);
 
@@ -58,11 +136,11 @@ struct Plane
 		{
 			float numer = Dot(Center - r.Origin, Normal);
 			float t = (numer / denom);
-			
-			return t > 1e-6;
+
+			return t;
 		}
 
-		return false;
+		return 0.0f;
 	}
 
 };
@@ -74,7 +152,12 @@ __constant__ Sphere Spheres[] =
 
 __constant__ Plane Planes[] =
 {
-	{{0.0f, 0.0f, 10.0f},{0.0f, 0.0f, 1.0f }, 1.0f},
+	{{0.0f, -1.0f, 1.0f},{0.0f, 1.0f, 0.0f }, 1.0f},
+};
+
+__constant__ Box Boxes[] =
+{
+	{ {0, 0, 0}, {1, 1, 1}, {0.33, 0.33, 0} }
 };
 
 void PathTracer::Awake()
@@ -181,23 +264,21 @@ __global__ void KernelIntersectScene(CUsurfObject surface, unsigned int width, u
 	float3 rayDir = make_float3(0, 0, 1);
 	float4 color = make_float4(0, 0, 0, 0);
 
-	Ray r = Ray(origin, rayDir);
+	Ray camera = Ray(origin, rayDir);
 	float3 uv = make_float3(x / (float)width, y / (float)height, 0.0f);
 
 	float3 cx = make_float3(width * 1.5708f / (float)height, 0, 0);
 	float3 cy = Normalize(Cross(cx, rayDir)) * 1.5708f;
 
-	uv.x *= 1.777f;
+	float3 dir = (cx * ((.25f + x) / (float)width - .5f) + cy * ((.25f + y) / (float)height - .5f)) + camera.Direction;
+	//float3 dir = Normalize(camera.Direction + uv);
 
-	float3 dir = (cx * ((.25f + x) / (float)width - .5f) + cy * ((.25f + y) / (float)height - .5f)) + r.Direction;
-	//float3 dir = Normalize(r.Direction + uv);
-
-	r.Direction = Normalize(dir);
+	Ray r = Ray(origin, dir);
 
 	color = make_float4(r.Direction.x, r.Direction.y, r.Direction.z, 1.0f);
 
-	bool bIntersect = Planes[0].Intersect(r);
-	if (bIntersect)
+	float t = Boxes[0].Intersect(r);
+	if (t > 1e-6)
 	{
 		color = make_float4(1.0f, 0.0f, 0.0f, 1.0f);
 	}
