@@ -31,7 +31,7 @@ struct PathTracer : public DXSample
 public:
 
 	PathTracer()
-		: DXSample(1280, 720, "CUDA Path Tracer")
+		: DXSample(1024, 768, "CUDA Path Tracer")
 	{
 	}
 

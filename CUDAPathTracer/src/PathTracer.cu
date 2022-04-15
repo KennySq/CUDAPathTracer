@@ -128,19 +128,19 @@ struct Plane
 	float3 Normal;
 	float Length;
 
-	__device__ float Intersect(const Ray& r) const
+	__device__ bool Intersect(const Ray& r) const
 	{
-		float denom = Dot(Normal, r.Direction);
+		float denom = Dot(r.Direction, Normal);
 
 		if (denom > 1e-6)
 		{
-			float numer = Dot(Center - r.Origin, Normal);
+			float numer = Dot((Center - r.Origin) , Normal);
 			float t = (numer / denom);
 
-			return t;
+			return (t >= 1e-6);
 		}
 
-		return 0.0f;
+		return false;
 	}
 
 };
@@ -152,12 +152,12 @@ __constant__ Sphere Spheres[] =
 
 __constant__ Plane Planes[] =
 {
-	{{0.0f, -1.0f, 1.0f},{0.0f, 1.0f, 0.0f }, 1.0f},
+	{{0.0f, 1.0f, 10.0f},{0.0f, 1.0f, 0.0f }, 0.1f},
 };
 
 __constant__ Box Boxes[] =
 {
-	{ {0, 0, 0}, {1, 1, 1}, {0.33, 0.33, 0} }
+	{ {1, 2, 0}, {1, 1, 1}, {0.33, 0.33, 0} }
 };
 
 void PathTracer::Awake()
@@ -255,7 +255,7 @@ void PathTracer::Update(float delta)
 
 }
 
-__global__ void KernelIntersectScene(CUsurfObject surface, unsigned int width, unsigned int height)
+__global__ void KernelIntersectScene(CUsurfObject surface, unsigned int width, unsigned int height, float aspectRatio)
 {
 	int x = blockDim.x * blockIdx.x + threadIdx.x;
 	int y = blockDim.y * blockIdx.y + threadIdx.y;
@@ -264,24 +264,41 @@ __global__ void KernelIntersectScene(CUsurfObject surface, unsigned int width, u
 	float3 rayDir = make_float3(0, 0, 1);
 	float4 color = make_float4(0, 0, 0, 0);
 
+	float3 lightPos0 = make_float3(100, 100, 100);
+	float3 lightDir0 = make_float3(0, 0, 0) - lightPos0;
+
 	Ray camera = Ray(origin, rayDir);
 	float3 uv = make_float3(x / (float)width, y / (float)height, 0.0f);
 
-	float3 cx = make_float3(width * 1.5708f / (float)height, 0, 0);
-	float3 cy = Normalize(Cross(cx, rayDir)) * 1.5708f;
+	float3 cx = make_float3(width * aspectRatio/ (float)height, 0, 0);
+	float3 cy = Normalize(Cross(cx, rayDir)) * aspectRatio;
 
 	float3 dir = (cx * ((.25f + x) / (float)width - .5f) + cy * ((.25f + y) / (float)height - .5f)) + camera.Direction;
-	//float3 dir = Normalize(camera.Direction + uv);
-
+	
 	Ray r = Ray(origin, dir);
 
 	color = make_float4(r.Direction.x, r.Direction.y, r.Direction.z, 1.0f);
 
 	float t = Boxes[0].Intersect(r);
-	if (t > 1e-6)
+	bool plane0 = Planes[0].Intersect(r);
+	float box0 = Boxes[0].Intersect(r);
+
+	
+	if (plane0 == true)
 	{
 		color = make_float4(1.0f, 0.0f, 0.0f, 1.0f);
+		
 	}
+	if (box0 > 1e-6)
+	{
+		color = make_float4(0.0f, 1.0f, 0.0f, 1.0f);
+
+	}
+
+	/*if (plane0 > 1e-6)
+	{
+		color = make_float4(1.0f, 0.0f, 0.0f, 1.0f);
+	}*/
 
 	surf2Dwrite<float4>(color, surface, x * sizeof(float4), y);
 }
@@ -291,7 +308,7 @@ void PathTracer::Render(float delta)
 	dim3 block = dim3(16, 16, 1);
 	dim3 grid = dim3(mWidth / block.y, mHeight / block.y, 1);
 
-	KernelIntersectScene << <grid, block >> > (mCudaRenderSurface, mWidth, mHeight);
+	KernelIntersectScene << <grid, block >> > (mCudaRenderSurface, mWidth, mHeight, mWidth / (float)mHeight);
 	drawScreen();
 
 	cudaDeviceSynchronize();
